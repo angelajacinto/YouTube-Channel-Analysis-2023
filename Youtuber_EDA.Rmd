@@ -1,0 +1,535 @@
+---
+title: "CITS4009 Project 1"
+author: "Angela JACINTO (23778435)"
+date: "`r Sys.Date()`"
+output: html_document
+shiny app: "https://youtu.be/V2JX99ZWYk8"
+---
+
+### Introduction
+The dataset comprises details of the most subscribed YouTube channels, capturing attributes like their earnings, subscriber count, video views, and more.The data set analyzed can be obtained from the Kaggle platform. https://www.kaggle.com/datasets/nelgiriyewithana/global-youtube-statistics-2023
+
+### Loading and Overview  
+  
+Loading the Libraries 
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(ggthemes)
+library(gridExtra)
+library(dplyr)
+library(tidyverse)
+library(reshape2)
+library(stringr)
+library(GGally)
+library(shiny)
+library(shinyWidgets)
+library(shiny)
+library(shinydashboard)
+library(shinythemes)
+
+```
+  
+Loading the Dataset 
+```{r}
+ytbestats <- read.csv("youtube_UTF_8.csv")
+```
+  
+Initial Data Inspection 
+```{r echo=T, results='hide'}
+#Sorting through all the unique values in every column to get an overview 
+for( i in colnames(ytbestats))
+{
+  cat("Unique values in", i,":", unique(ytbestats[,i]),"\n")
+}
+```
+Code adapted from https://stackoverflow.com/a/71953429/
+Original answer by jpsmith on Stack Overflow
+
+
+```{r echo=T, results='hide'}
+str(ytbestats)
+summary(ytbestats)
+```
+The columns are mostly comprised of numerical and string data type. 
+
+
+```{r}
+#Checking for missing values
+missing_count <- sapply(ytbestats, function(x) sum(is.na(x)))
+
+#Checking for zero values 
+zero_count <- sapply(ytbestats, function(x) sum(x == 0, na.rm = TRUE))
+
+#Checking for nan string values 
+nan_count <- sapply(ytbestats, function(x) sum(x == "nan", na.rm = TRUE))
+```
+We can see that there are 18 columns that have several missing values with country and abbreviation having the same number of missing values of 122. 
+Several columns related to country-specific data such as Population, Unemployment Rate, Urban Population, Latitude, Longitude and Gross Tertiary Education Enrollment also contain 123 missing values each. 
+There are also columns that contain 0 values such as video views, uploads and earnings. 
+Moreover, the columns category, country, abbreviation, channel type and created month contain nan strings. 
+
+
+
+
+### Data Cleaning
+
+
+##### Handling Categorical Variables 
+Category, Channel Type
+```{r}
+#Handling missing values for category and channel type using Hierarchical Imputation
+
+#Imputing category
+imputed_category <- ytbestats
+replacement_cat <- c("Music" = "Music",
+  "Entertainment" = "Entertainment",
+  "Education" = "Education",
+  "People" = "People & Blogs",
+  "Games" = "Gaming",
+  "Howto" = "Howto & Style",
+  "Sports" = "Sports",
+  "Tech" = "Science & Technology",
+  "Film" = "Film & Animation")
+
+#Looping through the vector and replacing values 
+for (ct in names(replacement_cat)) {
+  mask <- imputed_category$category == "nan" & imputed_category$channel_type == ct
+  imputed_category$category[mask] <- replacement_cat[ct]
+}
+
+#Imputing channel type
+imputed_ct <- imputed_category
+replacement_ct <- c(
+  "Music" = "Music",
+  "Howto & Style" = "Howto",
+  "Entertainment" = "Entertainment",
+  "Gaming" = "Games",
+  "Comedy" = "Comedy",
+  "Film & Animation" = "Film",
+  "People & Blogs" = "People",
+  "Pets & Animals" = "Animals",
+  "Science & Technology" = "Tech")
+
+#Looping through the vector and replacing values 
+for (cat in names(replacement_ct)) {
+  mask <- imputed_ct$channel_type == "nan" & imputed_ct$category == cat
+  imputed_ct$channel_type[mask] <- replacement_ct[cat]
+}
+
+
+#Removing 4 irrelevant rows based on category and channel type 
+clean_cat_ct <- imputed_ct[!((imputed_ct$category == "nan" & imputed_ct$channel_type == "nan") | 
+                             (imputed_ct$category == "Shows" & imputed_ct$channel_type == "nan")), ]
+
+
+```
+The column 'Category' and 'Channel Type' represent similar classifications for the YouTube channels. In order to lessen the "nan" values in both columns, we replace the similar words that belong in each column to the other and vice versa through the use of a for loop. 
+
+
+
+Country and Abbreviation 
+```{r}
+#Replacing rows with empty values to "Unknown" under the Country and Abbreviation column
+clean_country <- clean_cat_ct
+clean_country$Country <- ifelse(clean_country$Country == "nan", "Unknown", clean_country$Country)
+
+clean_country$Abbreviation <- ifelse(clean_country$Abbreviation == "nan", "Unknown", clean_country$Abbreviation)
+```
+There are several rows with "nan" strings under the columns Country and Abbreviation. Instead of omitting these rows, we replace them with the word "Unkown" allowing other data from these rows to be utilized in other analyses. 
+
+
+
+
+##### Handling Numerical Values 
+Video views
+```{r echo=T, results='hide'}
+#Shows the rows with 0 values from the video.views column
+clean_video_views <- clean_country
+clean_video_views[clean_video_views$video.views==0,]
+
+#Removes rows with 0 values (6 of them)
+clean_video_views <- clean_video_views[!(clean_video_views$video.views==0), ]
+```
+There were a total of eight YouTube channels identified with zero video views, and these channels fall under the category of official channels managed by YouTube. The Google support page states that YouTube creates auto-generated channels in order to collect trending and popular videos by topic. Their existence serves the purpose of authenticating content within specific categories and are designed for content verification and centralization rather than revenue generation.
+
+The rows with auto-generated channels were dropped. Since there were only a few of them, their impact on the analysis results wasn't significant. This will keep the data accurate and the analysis valid, and won't cause any big issues to leave out these rows.
+
+EDM Sauce. (2018). What are YouTube topic channels? Retrieved from https://www.edmsauce.com/2018/03/16/youtube-topic-channels/#:~:text=Introduction%20YouTube%20Topic%20Channels.&text=Google's%20support%20page%20says%20that,significant%20presence%20on%20the%20site.
+
+
+
+
+Video Views for the Last 30 days
+```{r message=FALSE, warning=FALSE}
+#Histogram of video_views_for_the_last_30_days
+#Ensuring the column is treated as numeric
+clean_video_views$video_views_for_the_last_30_days <- as.numeric(as.character(clean_video_views$video_views_for_the_last_30_days))
+
+# Plotting the histogram using ggplot2
+hist_video_30 <- ggplot(clean_video_views, aes(x=video_views_for_the_last_30_days)) + 
+  geom_histogram(aes(y = ..density..), fill="lightblue", bins = 120, color="black", alpha=0.7) +
+  geom_density(color = "red") +
+  labs(title="Distribution of Video Views for Last 30 Days 1", x="Video Views", y="Frequency") +
+  theme_minimal()
+
+hist_video_30
+```
+
+The histogram above shows the distribution of the data excluding the missing values. It shows a right-skewed distribution which indicates that most channels have fewer views while a small number of channels have a high number of views. Therefore, it is appropriate to impute the missing values with the median rather than the mean as it can be influenced by the extreme values resulting in inaccurate estimates. 
+
+```{r echo=T, results='hide', message=FALSE, warning=FALSE}
+#Imputing missing values with median, video_views_for_the_last_30_days
+imputed_video_30 <- clean_video_views
+
+#Calculates the median of the column, excluding NAs
+median_video_30 <- median(imputed_video_30$video_views_for_the_last_30_days, na.rm = TRUE)
+
+#Replaces NA values with the median
+imputed_video_30$video_views_for_the_last_30_days[is.na(imputed_video_30$video_views_for_the_last_30_days)] <- median_video_30
+
+#Ensuring the column no longer has "nan" values
+imputed_video_30[imputed_video_30$video_views_for_the_last_30_days == "nan", ]
+```
+
+```{r message=FALSE, warning=FALSE}
+#Cleaned histogram of 'Video view for the last 30 days' 
+hist_video_30_clean <- ggplot(imputed_video_30, aes(x=video_views_for_the_last_30_days)) + 
+  geom_histogram(aes(y = ..density..), fill="lightblue", bins = 120, color="black", alpha=0.7) +
+  geom_density(color = "red") +
+  labs(title="Distribution of Video Views for Last 30 Days", x="Video Views", y="Frequency") +
+  theme_minimal()
+
+#Comparing both histograms
+grid.arrange(hist_video_30, hist_video_30_clean)
+```
+
+By doing median imputation, it will fill in the missing values and increase its density around the median. As a result, causing a sharper or more prominent peak in the imputed plot but without dramatically changing the distribution of the data as the percentage of missing data is relatively small. This suggests that the imputation did not distort the data distribution, making our analyses and interpretations valid. 
+
+
+
+Subscribers for the Last 30 Days
+```{r message=FALSE, warning=FALSE}
+hist_subs_30 <- ggplot(imputed_video_30, aes(x=subscribers_for_last_30_days)) + 
+  geom_histogram(aes(y = ..density..), fill="lightblue", bins = 50, color="black", alpha=0.7) +
+  geom_density(color = "red") +
+  labs(title="Distribution of Subscribers for Last 30 Days 1", x="Subscribers", y="Frequency") +
+  theme_minimal() +
+  ylim(0, 1e-5)
+```
+
+```{r message=FALSE, warning=FALSE}
+imputed_subs_30 <- imputed_video_30
+# Calculate the median of the column, excluding NAs
+median_subs <- median(imputed_subs_30$subscribers_for_last_30_days, na.rm = TRUE)
+
+#Replaces NA values with the median
+imputed_subs_30$subscribers_for_last_30_days[is.na(imputed_subs_30$subscribers_for_last_30_days)] <- median_subs
+
+#Histogram with median replacement
+hist_subs_30_median <- ggplot(imputed_subs_30, aes(x=subscribers_for_last_30_days)) + 
+  geom_histogram(aes(y = ..density..), fill="lightblue", bins = 50, color="black", alpha=0.7) +
+  geom_density(color = "red") + 
+  labs(title="Distribution of Subscribers for Last 30 Days", x="Subscribers", y="Frequency") +
+  theme_minimal() +
+  ylim(0, 1e-5)
+
+#Comparing the two histograms side by side 
+grid.arrange(hist_subs_30, hist_subs_30_median)
+```
+
+There is not much difference in the shape of the distribution even if almost one third of the data was replaced with the median of the variable. The only change that occurred is the height of the bars surrounding the median value, which led to a change in the scale of the y axis. (The use of the ylim function was used for better visualisation) However, since one third of the data set was changed to the median, it can lead to a bias which should be taken into account when making interpretations. 
+
+
+
+Highest Yearly Earnings 
+```{r}
+#Histogram of highest yearly earnings 
+hist_highest_yearly <- ggplot(imputed_subs_30, aes(x=highest_yearly_earnings)) + 
+  geom_histogram(fill="lightblue", bins = 50, color="black", alpha=0.7) +
+  labs(title="Distribution of Highest Yearly Earnings 1", x="Highest Yearly Earnings", y="Frequency") +
+  theme_minimal()
+```
+
+```{r}
+# Calculate the median of the column, 
+imputed_hye <- imputed_subs_30
+median_hye <- median(imputed_hye$highest_yearly_earnings, na.rm = TRUE)
+
+#Replaces values less than 180 with the median
+imputed_hye$highest_yearly_earnings[imputed_hye$highest_yearly_earnings < 180] <- median_hye
+
+#Histogram with median replacement
+hist_hye_median <- ggplot(imputed_hye, aes(x=highest_yearly_earnings)) + 
+  geom_histogram(fill="lightblue", bins = 50, color="black", alpha=0.7) +
+  labs(title="Distribution of Highest Yearly Earnings", x="Highest Yearly Earnings", y="Frequency") +
+  theme_minimal()
+  grid.arrange(hist_highest_yearly, hist_hye_median)
+```
+
+It's unlikely for a Youtube channel's highest yearly earnings to be below 180 dollars given Youtube's payment structure. Youtube pays creators based on a system called CPM (cost per thousand views). Depending on the niche of the channel, the CPM can vary, but a common estimate is around 0.18 dollars per view. Therefore, using a benchmark of values less than 180 dollars for imputation is appropriate. Though there was a change in its peak after imputation, the overall distribution's shape remained consistent telling us that the outliers and inconsistencies were handled effectively. 
+
+Dunn, E. (2023, May 23). How much do YouTubers make? 2023 facts and figures. Credit Karma. https://www.creditkarma.com/income/i/how-much-do-youtubers-make
+
+
+
+
+Lowest Yearly Earnings 
+```{r}
+#Histogram of lowest yearly earnings
+hist_lowest_yearly <- ggplot(imputed_hye, aes(x=lowest_yearly_earnings)) + 
+  geom_histogram(fill="lightblue", bins = 50, color="black", alpha=0.7) +
+  labs(title="Distribution of Lowest Yearly Earnings 1", x="Lowest Yearly Earnings", y="Frequency") +
+  theme_minimal()
+
+```
+
+```{r}
+# Calculate the median of the column 
+imputed_lye <- imputed_hye
+median_lye <- median(imputed_lye$lowest_yearly_earnings, na.rm = TRUE)
+
+# Replace NA values in the copied data frame's column with the median
+imputed_lye$lowest_yearly_earnings[imputed_lye$lowest_yearly_earnings < 23] <- median_lye
+  
+#Histogram with median replacement
+hist_lye_median <- ggplot(imputed_lye, aes(x=lowest_yearly_earnings)) + 
+  geom_histogram(fill="lightblue", bins = 50, color="black", alpha=0.7) +
+  labs(title="Distribution of Lowest Yearly Earnings", x="Lowest Yearly Earnings", y="Frequency") +
+  theme_minimal()
+
+grid.arrange(hist_lowest_yearly, hist_lye_median)
+
+
+```
+
+Since Youtube channels get compensated based on the number of views, we will choose the lowest yearly earning of the channel with the least amount of views as a benchmark for imputation. The Youtube channels with missing data could not have earned less than the Youtube Channel with the least number of views. Just like the highest yearly earnings category, there was a change in its peak after imputation but the overall distribution's shape remained consistent telling us that the outliers and inconsistencies were handled effectively. 
+
+
+
+
+Created Year
+```{r echo=T, results='hide'}
+#Shows the sorted list of years present in the data set
+sort(unique(imputed_lye$created_year))
+
+#Removes unwanted and missing values
+clean_created_year <- imputed_lye
+clean_created_year <- clean_created_year[!(imputed_lye$created_year==1970 | is.na(imputed_lye$created_year)), ]
+```
+The year 1970 assigned to the year_created variable doesn't align with the actual launch of YouTube in 2005. It was necessary to drop this inconsistency. 
+
+Among the 995 data points, there were 5 rows that were dropped as it contained missing values. These missing entries were not a big concern since they were a small fraction of the total data. This was reasonable because the small number of missing values wouldn't significantly affect the analysis. The removal of these rows wouldn't have a major impact on the results and conclusions drawn from the data.
+
+
+
+Country Related Data  
+```{r}
+#Changing Gross Tertiary Education Enrollment nan values to it's median 
+imputed_cntryrltd_data <- clean_created_year
+median_cntryrltd <- median(imputed_cntryrltd_data$Gross.tertiary.education.enrollment...., na.rm = TRUE)
+imputed_cntryrltd_data$Gross.tertiary.education.enrollment....[is.na(imputed_cntryrltd_data$Gross.tertiary.education.enrollment....)] <- median_cntryrltd
+
+#Changing Population nan values to it's median 
+median_cntryrltd <- median(imputed_cntryrltd_data$Population, na.rm = TRUE)
+imputed_cntryrltd_data$Population[is.na(imputed_cntryrltd_data$Population)] <- median_cntryrltd
+
+#Changing Unemployment Rate nan values to it's median 
+median_cntryrltd <- median(imputed_cntryrltd_data$Unemployment.rate, na.rm = TRUE)
+imputed_cntryrltd_data$Unemployment.rate[is.na(imputed_cntryrltd_data$Unemployment.rate)] <- median_cntryrltd
+
+#Changing Longitude nan values to it's median 
+median_cntryrltd <- median(imputed_cntryrltd_data$Longitude, na.rm = TRUE)
+imputed_cntryrltd_data$Longitude[is.na(imputed_cntryrltd_data$Longitude)] <- median_cntryrltd
+
+#Changing Latitude nan values to it's median 
+median_cntryrltd <- median(imputed_cntryrltd_data$Latitude, na.rm = TRUE)
+imputed_cntryrltd_data$Latitude[is.na(imputed_cntryrltd_data$Latitude)] <- median_cntryrltd
+```
+
+
+
+
+##### Dropping Columns
+```{r} 
+col_drop <- subset(imputed_cntryrltd_data, select =
+          #Omitting Urban population and rank columns
+          -c(Urban_population,country_rank,video_views_rank,channel_type_rank),)
+```
+All columns related to ranks were omitted since they do not have any significant contribution to the overall analysis. 
+The column Urban population was also dropped as we will be focusing on the country's total population instead. 
+
+
+
+
+### Plots
+
+Bar Chart - Average Yearly Earnings by Category
+```{r}
+avg_earnings_by_category <- col_drop %>%
+  #Grouping the data by the unique values from category 
+  group_by(category) %>%
+  #Calculating average of yearly earnings per category 
+  summarise(
+    avg_highest_yearly = mean(highest_yearly_earnings, na.rm = TRUE),
+    avg_lowest_yearly = mean(lowest_yearly_earnings, na.rm = TRUE)
+  )
+
+# Plotting bar chart
+ggplot(avg_earnings_by_category, aes(x = category)) +
+  geom_bar(aes(y = avg_highest_yearly, fill = "Highest Yearly Earnings"), stat = "identity", position = "dodge") +
+  geom_bar(aes(y = avg_lowest_yearly, fill = "Lowest Yearly Earnings"), stat = "identity", position = "dodge") +
+  labs(title = "Average Yearly Earnings by Category",
+       y = "Average Earnings",
+       x = "Category",
+       fill = "Earnings Type") +
+  theme_minimal() +
+  #Rotates labels for better readability 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) # To rotate x labels for better visibility
+```
+
+The bar chart emphasizes the importance of category choice and it's potential earnings. It demonstrates that there are significant variations in earnings across the channel categories with Shows having the highest average yearly earnings while Autos & Vehicles, Sports and Pets & Animals also having relatively higher average highest yearly earnings suggesting that the top YouTubers that belong in these categories earn more than YouTubers from other categories. 
+Most of the categories show a clear distinction between their highest and lowest average earnings, which tells us that there is a notable difference in earning potentials among YouTube channels within each category. For example, the Shows category shows a significant difference in earnings, suggesting that some YouTubers in this category earn a lot while others might not earn as much. 
+
+Stash Team. (2023). The 11 Most Profitable YouTube Niches (2023). Stashvine. https://stashvine.com/most-profitable-youtube-niches/#make-money-online
+
+
+
+Pairwise Plot 
+```{r}
+#Defining the function 
+custom_scatter_plot <- function(data, mapping, ...){
+  ggplot(data = data, mapping = mapping) +
+    geom_point(aes(color = category), alpha = 0.6) +
+    theme_minimal()
+}
+
+#Creating pairs plot
+ggpairs(data = col_drop,
+        columns = c("highest_yearly_earnings", "subscribers", "video.views"),
+        title = "Pairs Plot of Earnings, Subscribers, and Video Views",
+        upper = list(continuous = custom_scatter_plot),
+        lower = list(continuous = custom_scatter_plot),
+        diag = list(continuous = "densityDiag")  # Using density plots for the diagonal
+)
+
+
+
+```
+
+Subscribers vs. Highest Yearly Earnings 
+The scatterplot illustrates the relationship between the highest yearly earnings and the number of subscribers of YouTubers. As the number of subscribers increases, the highest yearly earnings tend to increase as well. However, the yearly earnings of channels that have a significant number of subscribers vary widely. This could be influenced by other profit streams such as channel memberships, merchandise sale, crowd funding, brand deals/sponsorship, affiliates and YouTube's tipping features - Super Thanks, Super Chat, and Super stickers. Due to this variation, we can say that the two variables have a moderate positive correlation between each other.
+
+Highest Yearly Earnings vs. Video Views
+Highest yearly earnings and video views also has a positive correlation. More views generally means more ad impressions, which lead to higher earnings. 
+
+Subscribers vs. Video Views
+There is a strong positive relationship between the number of subscribers and video views. As the number of subscribers increases, the number of views increases. This is because subscribers are usually notified when the channel has uploaded a video, which leads to a cosistent viewer base. 
+
+Density Plots
+These plots give an idea about the distribution of each individual variable. It shows that majority of the Youtube channels have relatively low subscribers, views, and earnings, with a few channels standing out with high numbers.
+
+Video Creators. (n.d.). 6 Basic Revenue Streams for Top YouTubers. Video Creators. https://videocreators.com/6-basic-revenue-streams-top-youtubers/
+iGroove Music. (n.d.). Sources of Income on YouTube. iGroove Music. https://www.igroovemusic.com/blog/sources-of-income-on-youtube.html
+
+
+
+
+Line Graph - Created Year Frequency
+```{r}
+#Calculate counts for each year
+yearly_counts <- col_drop %>%
+  group_by(created_year) %>%
+  summarise(count = n())
+
+#Plots the line graph using ggplot2
+ggplot(yearly_counts, aes(x = created_year, y = count)) +
+  geom_line(color = "blue") + 
+  geom_point(color = "red") +  # To show individual data points
+  labs(title = "Frequency of Channels by Created Year",
+       x = "Created Year",
+       y = "Count/Frequency") +
+  theme_minimal()
+
+```
+
+The line graph illustrates the frequency of YouTube channels based on the column created year. We can observe the trend in the creation of YouTube channels over time. The significant increase in 2006 could be caused by the continuous popularity of being the first platform where users were given the chance to upload and share videos. With an initial 30,000 visitors per day, this number shot up to 100 million viewers by the summer of 2006. The platform's acquistion by Google could also be a key factor, which gained a lot of media exposure that led to an increaase of attention and awareness. In addition, Youtube announced the possibility of creators to monetize their content. The potential to earn revenue drew the public to join the platform. 
+
+Britannica. (n.d.). Susan Wojcicki. https://www.britannica.com/biography/Susan-Wojcicki
+vdocipher. (n.d.). History of YouTube. https://www.vdocipher.com/blog/history-of-youtube/
+Investopedia. (n.d.). Google's Incredible YouTube Purchase: 15 Years Later. https://www.investopedia.com/google-s-incredible-youtube-purchase-15-years-later-5200225
+TechCrunch. (2007, May 4). YouTube Launches Revenue Sharing Partner Program But No Pre-Rolls. https://techcrunch.com/2007/05/04/youtube-launches-revenue-sharing-partners-program-but-no-pre-rolls/
+
+
+
+Map Plotting
+```{r}
+#Group data by country and count the number of channels and highest yearly earning per country
+channel_count <- col_drop %>%
+  group_by(Country) %>%
+  summarise(Creators = n(), Yearly.Earnings = sum(highest_yearly_earnings, na.rm = T))
+
+#Gets top 2 countries by number of YouTubers by sorting the dataframe in descending order in order to extract the top 2 countries 
+top2_channels_countries <- channel_count %>%
+  arrange(desc(Creators)) %>%
+  head(2) %>%
+  pull(Country)
+
+#Gets top 2 countries by highest yearly earnings by sorting the dataframe in descending order in order to extract the top 2 countries with highest yearly earnings
+top2_earnings_countries <- channel_count %>%
+  arrange(desc(Yearly.Earnings)) %>%
+  head(2) %>%
+  pull(Country)
+
+#Merges with original data to get latitude and longitude
+channel_map_data <- merge(channel_count, col_drop, by="Country", all.x=TRUE)
+
+#Converts Country to factor with specific levels for top 2 channels and earnings
+channel_map_data$Top.Channel.Country <- factor(ifelse(channel_map_data$Country %in% top2_channels_countries, channel_map_data$Country, "Other"), levels=c(top2_channels_countries, "Other"))
+channel_map_data$Top.Earning.Country <- factor(ifelse(channel_map_data$Country %in% top2_earnings_countries, channel_map_data$Country, "Other"), levels=c(top2_earnings_countries, "Other"))
+
+#Defines the map theme
+map_theme <- theme_few() +
+  theme(plot.title = element_text(color = "darkblue")) +
+  theme(strip.text.x = element_text(size = 14, colour = "#202020")) +
+  theme(plot.margin=margin(10,30,10,30)) +
+  theme(panel.grid = element_blank(),
+        panel.border = element_blank(),
+        legend.position="top", legend.direction = 'horizontal',
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+
+#Plot the map for total channels
+ggplot(channel_map_data) +
+  geom_polygon(data=map_data("world"), aes(x = long, y = lat, group = group), fill="#F0F0F0", colour = "lightgray") +
+  geom_point(aes(x=Longitude, y=Latitude, size = Creators, color = Top.Channel.Country), alpha=0.7) +
+  scale_color_manual(values = c(scales::hue_pal()(length(top2_channels_countries)), "grey50"), breaks = top2_channels_countries) +
+  coord_quickmap() +
+  ggtitle("Total Number of YouTube Channels by Country") + 
+  map_theme
+
+#Plot the map for highest yearly earnings
+ggplot(channel_map_data) +
+  geom_polygon(data=map_data("world"), aes(x = long, y = lat, group = group), fill="#F0F0F0", colour = "lightgray") +
+  geom_point(aes(x=Longitude, y=Latitude, size = Yearly.Earnings, color = Top.Earning.Country), alpha=0.7) +
+  scale_color_manual(values = c(scales::hue_pal()(length(top2_earnings_countries)), "grey50"), breaks = top2_earnings_countries) +
+  coord_quickmap() +
+  ggtitle("Sum of Highest Yearly Earnings Grouped by Country") + 
+  map_theme
+
+```
+
+The purpose of the two maps is to highlight the top 2 countries in terms of the count of Youtube Channels and it's earnings. The plot illustrates that both the US and India being the top 2 countries for both categories. This tells us that content creation in both countries are very popular and the monetization of their videos are effective. 
+
+
+The maps are crafted to highlight the leading countries dominating the YouTube landscape: in terms of both channel count and earnings. Both the US and India are at the forefront of these categories. This tells us that content creation in both countries are very popular and the monetization of their videos are effective.
+
+
+
+
+
