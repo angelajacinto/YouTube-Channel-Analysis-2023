@@ -51,6 +51,7 @@ Original answer by jpsmith on Stack Overflow
 ```{r echo=T, results='hide'}
 str(ytbestats)
 summary(ytbestats)
+library(compositions)
 ```
 The columns are mostly comprised of numerical and string data type. 
 
